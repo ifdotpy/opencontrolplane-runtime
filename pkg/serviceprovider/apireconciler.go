@@ -3,6 +3,7 @@ package serviceprovider
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/openmcp-project/controller-utils/pkg/clusters"
 	controllerutil2 "github.com/openmcp-project/controller-utils/pkg/controller"
@@ -23,6 +24,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
+
+// missingConfigRequeueInterval is the retry interval used while the
+// ProviderConfig is absent or in deletion, in modes without a config watch.
+const missingConfigRequeueInterval = 30 * time.Second
+
+// missingConfigRequeue returns the timed retry for a missing ProviderConfig:
+// zero in the classic mode (its config watch triggers the retry), a fixed
+// interval in the multicluster mode (which has no config watch).
+func (t tenant) missingConfigRequeue() time.Duration {
+	if t.requeueOnMissingConfig {
+		return missingConfigRequeueInterval
+	}
+	return 0
+}
 
 // APIReconciler implements a generic reconcile loop to separate platform
 // and service provider developer space.
@@ -64,9 +79,8 @@ func NewAPIReconcilerBuilder[T API, C Config]() *APIReconcilerBuilder[T, C] {
 	}
 }
 
-// MustBuild validates every required field has been set and returns the APIReconciler.
-func (b *APIReconcilerBuilder[T, C]) MustBuild() *APIReconciler[T, C] {
-	// validate required fields
+// validateCommon panics on any missing field that both build variants require.
+func (b *APIReconcilerBuilder[T, C]) validateCommon() {
 	if b.apiReconciler.clusterAccessProvider == nil {
 		panic("cluster access provider is required")
 	}
@@ -76,14 +90,19 @@ func (b *APIReconcilerBuilder[T, C]) MustBuild() *APIReconciler[T, C] {
 	if b.apiReconciler.emptyConfig == nil {
 		panic("empty config provider is required")
 	}
-	if b.apiReconciler.onboardingCluster == nil {
-		panic("onboarding cluster is required")
-	}
 	if b.apiReconciler.platformCluster == nil {
 		panic("platform cluster is required")
 	}
 	if b.apiReconciler.reconciler == nil {
 		panic("reconciler is required")
+	}
+}
+
+// MustBuild validates every required field has been set and returns the APIReconciler.
+func (b *APIReconcilerBuilder[T, C]) MustBuild() *APIReconciler[T, C] {
+	b.validateCommon()
+	if b.apiReconciler.onboardingCluster == nil {
+		panic("onboarding cluster is required")
 	}
 	return &b.apiReconciler
 }
@@ -165,6 +184,10 @@ func (b *APIReconcilerBuilder[T, C]) AdditionalDataGenerators(generators ...func
 // multicluster mode they are resolved per request.
 type tenant struct {
 	cli client.Client
+	// requeueOnMissingConfig requests a timed retry while the ProviderConfig
+	// is absent or in deletion. The multicluster mode sets it because it has
+	// no ProviderConfig watch; the classic mode relies on its watch instead.
+	requeueOnMissingConfig bool
 	// accessKey is the request identity used for naming ClusterRequests /
 	// AccessRequests on the platform cluster. In multicluster mode it carries
 	// a per-workspace prefix so identically named objects in different
@@ -208,13 +231,13 @@ func (r *APIReconciler[T, C]) reconcileTenant(ctx context.Context, t tenant, key
 	if err := r.platformCluster.Client().Get(ctx, client.ObjectKeyFromObject(providerConfig), providerConfig); err != nil {
 		if apierrors.IsNotFound(err) {
 			StatusProgressing(obj, reasonReconcileError, "No ProviderConfig found")
-			return ctrl.Result{}, nil
+			return ctrl.Result{RequeueAfter: t.missingConfigRequeue()}, nil
 		}
 		return ctrl.Result{}, err
 	}
 	if !providerConfig.GetDeletionTimestamp().IsZero() {
 		StatusProgressing(obj, reasonReconcileError, "ProviderConfig is marked for deletion")
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: t.missingConfigRequeue()}, nil
 	}
 	providerConfigCopy := providerConfig.DeepCopyObject().(C)
 	// generate additional data
@@ -415,6 +438,9 @@ func (r *APIReconciler[T, C]) clusters(ctx context.Context, req ctrl.Request, ad
 func (r *APIReconciler[T, C]) SetupWithManager(mgr ctrl.Manager, providerName string) error {
 	if providerName == "" {
 		return errors.New("provider name is required for manager setup")
+	}
+	if r.onboardingCluster == nil {
+		return errors.New("onboarding cluster is required for the classic setup; use SetupWithMulticlusterManager for reconcilers built with MustBuildMulticluster")
 	}
 	r.providerName = providerName
 	controller := ctrl.NewControllerManagedBy(mgr).

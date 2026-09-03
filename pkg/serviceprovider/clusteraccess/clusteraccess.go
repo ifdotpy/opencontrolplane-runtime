@@ -54,6 +54,14 @@ type simpleProviderAdapter struct {
 	simple Provider
 }
 
+// IsLegacyAdapter reports whether the given provider is the adapter around
+// the legacy Provider interface, which resolves cluster identity purely from
+// the request name and therefore cannot be used in multicluster mode.
+func IsLegacyAdapter(p AdvancedProvider) bool {
+	_, ok := p.(*simpleProviderAdapter)
+	return ok
+}
+
 // NewSimpleProviderAdapter wraps the legacy Provider as an AdvancedProvider.
 func NewSimpleProviderAdapter(provider Provider) AdvancedProvider {
 	return &simpleProviderAdapter{simple: provider}
