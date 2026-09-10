@@ -21,28 +21,24 @@ func TestTenantAccessKey(t *testing.T) {
 		}
 	})
 
-	t.Run("name-safe cluster names are used verbatim (collision-free)", func(t *testing.T) {
+	t.Run("cluster name qualifies the namespace, name is untouched", func(t *testing.T) {
 		got := tenantAccessKey(mcreconcile.Request{Request: base, ClusterName: "22zec2xbbxeai38f"})
-		if got.Name != "22zec2xbbxeai38f-db" {
-			t.Fatalf("expected verbatim prefix, got %q", got.Name)
+		if got.Name != "db" {
+			t.Fatalf("name must be preserved, got %q", got.Name)
 		}
-		if got.Namespace != "ns" {
-			t.Fatalf("namespace must be preserved, got %q", got.Namespace)
+		if got.Namespace != "22zec2xbbxeai38f_ns" {
+			t.Fatalf("expected qualified namespace, got %q", got.Namespace)
 		}
 	})
 
-	t.Run("unsafe cluster names fall back to the standard short hash", func(t *testing.T) {
-		req := mcreconcile.Request{Request: base, ClusterName: "root:orgs:acme:team1"}
-		first := tenantAccessKey(req)
-		second := tenantAccessKey(req)
-		if first != second {
-			t.Fatalf("not deterministic: %v vs %v", first, second)
-		}
-		if strings.ContainsAny(first.Name, ":") {
-			t.Fatalf("unsafe characters leaked into the name: %q", first.Name)
-		}
-		if len(first.Name) != 8+1+len("db") {
-			t.Fatalf("unexpected name shape: %q", first.Name)
+	t.Run("matches the ControlPlane controller's kcp-mode identity", func(t *testing.T) {
+		// The ControlPlane controller port derives the platform-side MCP
+		// namespace from ("<cluster>_<namespace>", name). The access key must
+		// feed the same inputs into StableMCPNamespace so a service object
+		// finds the MCP cluster of its same-named ControlPlane.
+		got := tenantAccessKey(mcreconcile.Request{Request: base, ClusterName: "cl1"})
+		if got.Namespace != "cl1_ns" || got.Name != "db" {
+			t.Fatalf("identity drifted from the ControlPlane scheme: %v", got)
 		}
 	})
 

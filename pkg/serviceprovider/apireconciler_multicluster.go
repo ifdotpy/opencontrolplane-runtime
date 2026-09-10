@@ -3,9 +3,7 @@ package serviceprovider
 import (
 	"context"
 	"errors"
-	"regexp"
 
-	controllerutil2 "github.com/openmcp-project/controller-utils/pkg/controller"
 	"github.com/openmcp-project/opencontrolplane-runtime/pkg/serviceprovider/clusteraccess"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -122,26 +120,22 @@ func (r *APIReconciler[T, C]) reconcileMulticluster(ctx context.Context, mgr mcm
 	return r.reconcileTenant(ctx, t, req.NamespacedName)
 }
 
-// safeNameComponent matches cluster names that can be used verbatim inside a
-// Kubernetes object name. kcp logical cluster names always match.
-var safeNameComponent = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$`)
-
 // tenantAccessKey derives the request identity used for naming cluster access
 // objects on the platform cluster. The logical cluster name is folded into
-// the request name as a stable prefix, keeping the result deterministic and
-// collision-free across tenant clusters. A name-safe cluster name (the kcp
-// case) is used verbatim; anything else falls back to the codebase's standard
-// short hash. Downstream naming helpers already shorten long names safely.
+// the request namespace ("<cluster>_<namespace>"), keeping the result
+// deterministic and collision-free across tenant clusters: every downstream
+// naming helper hashes the namespace (StableMCPNamespace, K8sNameUUID), so
+// the qualified value never has to be a valid namespace name, and "_" cannot
+// appear in a real namespace, so classic and multicluster identities cannot
+// collide. This is the same derivation the ControlPlane controller uses in
+// its kcp mode (StableMCPNamespaceCtx), so a service object and its
+// same-named ControlPlane in the same workspace resolve to the same
+// platform-side MCP namespace.
 func tenantAccessKey(req mcreconcile.Request) ctrl.Request {
 	out := ctrl.Request{NamespacedName: req.NamespacedName}
-	cluster := req.ClusterName
-	if cluster == "" {
+	if req.ClusterName == "" {
 		return out
 	}
-	prefix := string(cluster)
-	if !safeNameComponent.MatchString(prefix) {
-		prefix = controllerutil2.NameHashSHAKE128Base32(prefix)
-	}
-	out.Name = prefix + "-" + req.Name
+	out.Namespace = string(req.ClusterName) + "_" + req.Namespace
 	return out
 }
