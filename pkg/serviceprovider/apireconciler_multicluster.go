@@ -8,6 +8,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mccontext "sigs.k8s.io/multicluster-runtime/pkg/context"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
@@ -117,6 +118,11 @@ func (r *APIReconciler[T, C]) reconcileMulticluster(ctx context.Context, mgr mcm
 		accessKey:              tenantAccessKey(req),
 		requeueOnMissingConfig: true,
 	}
+	// Expose the tenant cluster to the provider's Reconciler implementation
+	// through the standard multicluster-runtime context helper, so providers
+	// that derive platform-side names from the object identity can qualify
+	// them the same way the access key does.
+	ctx = mccontext.WithCluster(ctx, req.ClusterName)
 	return r.reconcileTenant(ctx, t, req.NamespacedName)
 }
 
