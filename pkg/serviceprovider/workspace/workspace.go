@@ -59,8 +59,15 @@ type Runner struct {
 	Log     logging.Logger
 
 	mu       sync.Mutex
-	active   map[string]context.CancelFunc
+	active   map[string]*engagement
 	stopping bool
+}
+
+// engagement is one running Engage goroutine. superseded is set when a newer
+// Engage for the same workspace replaces it, so that it ends without Remove.
+type engagement struct {
+	cancel     context.CancelFunc
+	superseded bool
 }
 
 var _ multicluster.Aware = (*Runner)(nil)
@@ -81,17 +88,25 @@ func (r *Runner) isStopping() bool {
 	return r.stopping
 }
 
+func (r *Runner) isSuperseded(e *engagement) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return e.superseded
+}
+
 // Engage runs Ensure for the workspace and Remove when its context ends.
 func (r *Runner) Engage(ctx context.Context, name multicluster.ClusterName, cl cluster.Cluster) error {
 	r.mu.Lock()
 	if r.active == nil {
-		r.active = map[string]context.CancelFunc{}
+		r.active = map[string]*engagement{}
 	}
-	if cancel, ok := r.active[string(name)]; ok {
-		cancel()
+	if old, ok := r.active[string(name)]; ok {
+		old.superseded = true
+		old.cancel()
 	}
 	wsCtx, cancel := context.WithCancel(ctx)
-	r.active[string(name)] = cancel
+	eng := &engagement{cancel: cancel}
+	r.active[string(name)] = eng
 	r.mu.Unlock()
 
 	ws := Workspace{Name: string(name), Client: cl.GetClient()}
@@ -109,8 +124,9 @@ func (r *Runner) Engage(ctx context.Context, name multicluster.ClusterName, cl c
 			log.Info("Service ensured for workspace")
 		}
 		<-wsCtx.Done()
-		if r.isStopping() {
-			// The manager itself is stopping; keep the installation.
+		if r.isStopping() || r.isSuperseded(eng) {
+			// The manager is stopping, or a newer engagement of the same
+			// workspace took over: keep the installation.
 			return
 		}
 		// The provider cancelled the engagement: the binding is gone or the
