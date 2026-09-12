@@ -190,6 +190,44 @@ func MintKubeconfig(ctx context.Context, ws Workspace, providerCfg *rest.Config,
 	return clientcmd.Write(*cfg)
 }
 
+// Revoke removes the credential minted by MintKubeconfig from the workspace.
+// After a disengagement the provider's virtual workspace no longer serves the
+// workspace, so this talks to the workspace URL directly with the provider's
+// own identity. A workspace that is already gone is not an error.
+func Revoke(ctx context.Context, providerCfg *rest.Config, logicalCluster string, spec TokenSpec, namespaces ...string) error {
+	server, err := WorkspaceURL(providerCfg.Host, logicalCluster)
+	if err != nil {
+		return err
+	}
+	cfg := rest.CopyConfig(providerCfg)
+	cfg.Host = server
+	c, err := client.New(cfg, client.Options{})
+	if err != nil {
+		return fmt.Errorf("workspace client: %w", err)
+	}
+	del := func(obj client.Object) error {
+		if err := c.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+		return nil
+	}
+	if err := del(&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: spec.ServiceAccountName + "-" + spec.ClusterRole}}); err != nil {
+		return fmt.Errorf("clusterrolebinding: %w", err)
+	}
+	if err := del(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: spec.ServiceAccountName + "-token", Namespace: spec.Namespace}}); err != nil {
+		return fmt.Errorf("token secret: %w", err)
+	}
+	if err := del(&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: spec.ServiceAccountName, Namespace: spec.Namespace}}); err != nil {
+		return fmt.Errorf("serviceaccount: %w", err)
+	}
+	for _, ns := range namespaces {
+		if err := del(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+			return fmt.Errorf("namespace %q: %w", ns, err)
+		}
+	}
+	return nil
+}
+
 // WorkspaceURL turns the provider's virtual-workspace host into the direct URL
 // of a workspace: https://<kcp>/clusters/<logical cluster name>.
 func WorkspaceURL(providerHost, logicalCluster string) (string, error) {
