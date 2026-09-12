@@ -13,7 +13,6 @@ package workspace
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -59,16 +58,27 @@ type Runner struct {
 	Handler Handler
 	Log     logging.Logger
 
-	mu     sync.Mutex
-	active map[string]context.CancelFunc
+	mu       sync.Mutex
+	active   map[string]context.CancelFunc
+	stopping bool
 }
 
 var _ multicluster.Aware = (*Runner)(nil)
 
-// Start satisfies manager.Runnable.
+// Start satisfies manager.Runnable. When the manager stops, engagements end
+// too; the flag tells them apart from a real disengagement.
 func (r *Runner) Start(ctx context.Context) error {
 	<-ctx.Done()
+	r.mu.Lock()
+	r.stopping = true
+	r.mu.Unlock()
 	return nil
+}
+
+func (r *Runner) isStopping() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stopping
 }
 
 // Engage runs Ensure for the workspace and Remove when its context ends.
@@ -99,10 +109,12 @@ func (r *Runner) Engage(ctx context.Context, name multicluster.ClusterName, cl c
 			log.Info("Service ensured for workspace")
 		}
 		<-wsCtx.Done()
-		if errors.Is(ctx.Err(), context.Canceled) {
+		if r.isStopping() {
 			// The manager itself is stopping; keep the installation.
 			return
 		}
+		// The provider cancelled the engagement: the binding is gone or the
+		// workspace was deleted.
 		rmCtx, rmCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer rmCancel()
 		if err := r.Handler.Remove(rmCtx, ws); err != nil {
