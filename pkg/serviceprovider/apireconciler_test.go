@@ -1295,9 +1295,6 @@ var _ = Describe("API Reconciler", func() {
 				Expect(onboardingClient.Get(ctx, fooKey, foo)).To(Succeed())
 				return foo.Status
 			}).Should(HaveField("Phase", Equal("Ready")))
-			// consume the finalizer/status update reconcile request to have a quiet update channel for the following test.
-			// depending on reconciliation timing, the provider config update could otherwise be picked up by during the reconcile request caused by the primary watch.
-			Eventually(reconciler.createOrUpdateConfig).Should(Receive())
 		})
 
 		It("The Foo resource is reconciled when the provider config changes", func() {

@@ -1,6 +1,10 @@
 package serviceprovider
 
 import (
+	apiconst "github.com/openmcp-project/openmcp-operator/api/constants"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"strings"
 	"testing"
 
@@ -109,5 +113,38 @@ func expectPanicContaining(t *testing.T, contains string) func() {
 		if !ok || !strings.Contains(msg, contains) {
 			t.Fatalf("unexpected panic: %v", r)
 		}
+	}
+}
+
+// Both manager paths use this event contract. Status writes must not create
+// a reconcile loop, while changes that require provider work must enqueue.
+func TestDefaultForPredicates(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*corev1.Pod)
+		want   bool
+	}{
+		{"status only", func(p *corev1.Pod) { p.Status.Phase = corev1.PodRunning }, false},
+		{"generation", func(p *corev1.Pod) { p.Generation++ }, true},
+		{"labels", func(p *corev1.Pod) { p.Labels = map[string]string{"test": "changed"} }, true},
+		{"annotations", func(p *corev1.Pod) { p.Annotations = map[string]string{"test": "changed"} }, true},
+		{"deletion", func(p *corev1.Pod) { now := metav1.Now(); p.DeletionTimestamp = &now }, true},
+		{"ignore", func(p *corev1.Pod) {
+			p.Generation++
+			p.Annotations = map[string]string{apiconst.OperationAnnotation: apiconst.OperationAnnotationValueIgnore}
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "service", Generation: 1}}
+			after := before.DeepCopy()
+			tc.change(after)
+			got := true
+			for _, filter := range defaultForPredicates() {
+				got = got && filter.Update(event.UpdateEvent{ObjectOld: before, ObjectNew: after})
+			}
+			if got != tc.want {
+				t.Fatalf("enqueue = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

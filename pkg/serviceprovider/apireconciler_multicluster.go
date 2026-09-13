@@ -79,7 +79,8 @@ func (b *APIReconcilerBuilder[T, C]) MustBuildMulticluster() *APIReconciler[T, C
 // SetupWithMulticlusterManager sets up the controller with a
 // multicluster-runtime manager. The manager's provider defines the fleet of
 // tenant clusters (e.g. kcp workspaces via an APIExport virtual workspace).
-func (r *APIReconciler[T, C]) SetupWithMulticlusterManager(mgr mcmanager.Manager, providerName string) error {
+// Default event predicates match classic mode. Options override the For defaults.
+func (r *APIReconciler[T, C]) SetupWithMulticlusterManager(mgr mcmanager.Manager, providerName string, opts ...mcbuilder.ForOption) error {
 	if providerName == "" {
 		return errors.New("provider name is required for manager setup")
 	}
@@ -87,9 +88,10 @@ func (r *APIReconciler[T, C]) SetupWithMulticlusterManager(mgr mcmanager.Manager
 		return errors.New("reconciler was built for the classic mode; use MustBuildMulticluster")
 	}
 	r.providerName = providerName
+	forOpts := append([]mcbuilder.ForOption{mcbuilder.WithPredicates(defaultForPredicates()...)}, opts...)
 	return mcbuilder.ControllerManagedBy(mgr).
 		Named(providerName).
-		For(r.emptyObj()).
+		For(r.emptyObj(), forOpts...).
 		Complete(mcreconcile.Func(func(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
 			return r.reconcileMulticluster(ctx, mgr, req)
 		}))
