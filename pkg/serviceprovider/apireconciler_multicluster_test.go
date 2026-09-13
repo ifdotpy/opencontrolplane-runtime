@@ -42,6 +42,13 @@ func TestTenantAccessKey(t *testing.T) {
 		}
 	})
 
+	t.Run("logical cluster path remains part of the identity", func(t *testing.T) {
+		got := tenantAccessKey(mcreconcile.Request{Request: base, ClusterName: "root:org:account"})
+		if got.Namespace != "root:org:account_ns" || got.Name != "db" {
+			t.Fatalf("unexpected qualified identity: %v", got)
+		}
+	})
+
 	t.Run("same object name in different clusters does not collide", func(t *testing.T) {
 		a := tenantAccessKey(mcreconcile.Request{Request: base, ClusterName: "cluster-a"})
 		b := tenantAccessKey(mcreconcile.Request{Request: base, ClusterName: "cluster-b"})

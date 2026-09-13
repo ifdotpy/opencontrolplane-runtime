@@ -16,11 +16,9 @@ import (
 
 // Multicluster deployment mode
 //
-// This implements a first increment of the ADR "kcp-aware Service Provider
-// Runtime" (2026-08-20): the runtime, not the provider, owns the kcp watch
-// path, while the provider seam (CreateOrUpdate/Delete) stays unchanged.
-// APIExport provisioning, workspace token minting and running both modes in
-// one process are later increments of that ADR and slot into this seam.
+// The runtime accepts requests from a multicluster manager. The provider's
+// CreateOrUpdate/Delete interface stays unchanged. APIExport provisioning,
+// workspace credentials and provider deployment belong to the caller.
 //
 // In this mode the APIReconciler does not watch a single onboarding cluster.
 // Instead it is driven by a multicluster-runtime manager whose provider
@@ -35,9 +33,9 @@ import (
 //   - No onboarding cluster is configured; MustBuildMulticluster is used
 //     instead of MustBuild.
 //   - Cluster access objects (ClusterRequests / AccessRequests) on the
-//     platform cluster are named with a stable per-tenant prefix derived from
-//     the logical cluster name, so identically named API objects in different
-//     tenant clusters do not collide.
+//     platform cluster use a cluster-qualified namespace as their identity
+//     input. The configured namespace generator must normalize or hash that
+//     input. Identically named objects in different clusters do not collide.
 //   - Platform-side ProviderConfig / Secret / ConfigMap watches are not wired
 //     in this mode yet. A missing ProviderConfig is retried on a fixed
 //     interval; secret/configmap watching is rejected at build time.
